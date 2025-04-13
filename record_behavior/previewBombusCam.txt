@@ -1,0 +1,1 @@
+libcamera-vid --width 4056 --height 3040 --codec mjpeg --save-pts mjpeg -o "$OUTPUT" -t 30000 --framerate 4 --shutter 2500 --tuning-file /usr/share/libcamera/ipa/raspberrypi/imx219_noir.json

@@ -1,0 +1,9 @@
+#in terminal, enter:
+#crontab -e
+
+#enter:
+@reboot sudo mount /dev/sda1 /mnt/bombusbox -o umask=000
+@reboot sudo chmod -R ugo+rwx /mnt/bombusbox
+*/5 * * * * ~/Desktop/bombusboxRecord.sh
+0 0 * * * sudo shutdown -r now
+@reboot sudo python3 ~/Desktop/tunnelTrigger.py >> ~/Desktop/log.txt 2>&1
