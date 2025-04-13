@@ -42,13 +42,15 @@ d <- d %>% mutate(across(all_of(c( "round", "treatment")), as.factor))
 
 fig2 <- icb_plot(d, treatment, num_dead) + labs (y = "Number of bees dead \n (mean \u00B1 SE)") + stat_summary(shape = 15) 
 fig2
-#ggsave(fig2, filename = "figures/fig2_mortality.pdf", device = "pdf", height = 3.5, width = 4, units = "in")
+#ggsave(fig2, filename = "results/fig2_mortality.pdf", device = "pdf", height = 3.5, width = 4, units = "in")
 
 mort.model.p <- glmer(num_dead~treatment+(1|round), data = d, family = poisson)
 res.p <- simulateResiduals(mort.model.p)
 plot(res.p)
 testZeroInflation(res.p)
 summary(mort.model.p)
+
+#write.csv(as.data.frame(summary(mort.model.p)$coefficients), "results/S2_mortality.csv", row.names = T)
 
 ####### nest tracking
 nest_tracking_data <- read.csv('data/BuzzAnalyses/combinedIntBuzzAnalysis.csv')
@@ -142,7 +144,7 @@ p4 <- icb_plot(ind_nest_data, treatment, log10(mean_meanSpeed)) +
 p4
 
 fig3 <- grid.arrange(p1, p2, p3, p4, ncol = 1)
-#ggsave(fig3, filename = "figures/fig3_nestbehavior.pdf", device = "pdf", height = 13, width = 6, units = "in")
+#ggsave(fig3, filename = "results/fig3_nestbehavior.pdf", device = "pdf", height = 13, width = 6, units = "in")
 
 #####models
 
@@ -151,33 +153,44 @@ pc1.mod <- lmer(pc1_mean~treatment*day_or_night+(1|round/microcolony/bee_ID), da
 #Check fit plot
 plot(simulateResiduals(pc1.mod))
 summary(pc1.mod)
+#write.csv(as.data.frame(summary(pc1.mod)$coefficients), "results/S3_spatial_centrality.csv", row.names = T)
+
 #Assess effects
 emm_treatment.pc1 <- emmeans(pc1.mod, ~ treatment|day_or_night, type = "response")
 pairs(emm_treatment.pc1, adjust = "tukey")
+#write.csv(pairs(emm_treatment.pc1, adjust = "tukey"), "results/S4_sp_centr_comparisons.csv", row.names = F)
 
 ##### Activity by treatment
 act.mod <- glmmTMB(mean_meanAct~treatment*day_or_night+(1|round/microcolony/bee_ID), data = ind_nest_data, family = beta_family())
 plot(simulateResiduals(act.mod))
 summary(act.mod)
+#write.csv(as.data.frame(summary(act.mod)$coefficients$cond), "results/S5_mean_activity.csv", row.names = T)
+
 emm_treatment_by_time.act <- emmeans(act.mod, ~ treatment | day_or_night, type = "response")
 pairs(emm_treatment_by_time.act, adjust = "tukey")
+#write.csv(pairs(emm_treatment_by_time.act, adjust = "tukey"), "results/S6_mean_act_comparisons.csv", row.names = F)
 
 ##### Explore variability in activity
 tmp <- subset(ind_nest_data,n_obs > 25 & total_trackedFrames > 2000)
 act.var.mod <- glmmTMB(act_scope ~ treatment*day_or_night+(1|round/microcolony/bee_ID), data = tmp, family = beta_family(link = "logit"))
 plot(simulateResiduals(act.var.mod))
 summary(act.var.mod)
+#write.csv(as.data.frame(summary(act.var.mod)$coefficients$cond), "results/S7_activity_scope.csv", row.names = T)
+
 # Use emmeans to assess effects and pairwise differences
 emm_treatment_by_time.act.var <- emmeans(act.var.mod, ~ treatment | day_or_night, type = "response")
 pairs(emm_treatment_by_time.act.var, adjust = "tukey")
+#write.csv(pairs(emm_treatment_by_time.act.var, adjust = "tukey"), "results/S8_act_scope_comparisons.csv", row.names = F)
 
 ##### speed
 speed.mod <- lmer(log10(mean_meanSpeed) ~ treatment*day_or_night+(1|round/microcolony/bee_ID), data = ind_nest_data)
 plot(simulateResiduals(speed.mod))
 summary(speed.mod)
+#write.csv(as.data.frame(summary(speed.mod)$coefficients), "results/S9_mean_speed.csv", row.names = T)
+
 emm_treatment_by_time.speed <- emmeans(speed.mod, ~ treatment | day_or_night, type = "response")
 pairs(emm_treatment_by_time.speed, adjust = "tukey")
-
+#write.csv(pairs(emm_treatment_by_time.speed, adjust = "tukey"), "results/S10_speed_comparisons.csv", row.names = F)
 
 ###########forage tunnel
 ft_data <- read.csv('data/forage_tunnel_bouts.csv')
@@ -229,7 +242,7 @@ res.ft <- simulateResiduals(ft.mod)
 plot(res.ft)
 testZeroInflation(res.ft)
 summary(ft.mod)
-
+#write.csv(as.data.frame(summary(ft.mod)$coefficients), "results/S11_foraging_act.csv", row.names = T)
 
 #######flower visitation
 out_data <- read.csv("data/flower_visits.csv")
@@ -286,14 +299,18 @@ fl.mod1 <- glmmTMB(log1p(total_visits) ~ treatment + (1|round/microcolony), data
 res.fl1 <- simulateResiduals(fl.mod1)
 plot(res.fl1)
 summary(fl.mod1)
+#write.csv(as.data.frame(summary(fl.mod1)$coefficients$cond), "results/S12_total_visitation.csv", row.names = T)
 
 fl.mod2 <- glmmTMB(log1p(visits) ~ treatment*species + (1|round/microcolony), data = bee_species_visits)
 res.fl2 <- simulateResiduals(fl.mod2)
 plot(res.fl2)
 summary(fl.mod2)
+#write.csv(as.data.frame(summary(fl.mod2)$coefficients$cond), "results/S13_visitation_by_sp.csv", row.names = T)
+
 emm.mod.fl2 <- emmeans(fl.mod2,  ~ treatment|species)
 pairs(emm.mod.fl2, adjust = "tukey")
+#write.csv(pairs(emm.mod.fl2, adjust = "tukey"), "results/S14_sp_visits_comparisons.csv", row.names = F)
 
 fig4 <- grid.arrange(p5, p6, p7,
-  ncol = 2, nrow = 2, layout_matrix = rbind(c(1, 2), c(3, 3)))
-#ggsave(fig4, filename = "figures/fig4_foraging.pdf", device = "pdf", height = 7, width = 8, units = "in")
+                     ncol = 2, nrow = 2, layout_matrix = rbind(c(1, 2), c(3, 3)))
+#ggsave(fig4, filename = "results/fig4_foraging.pdf", device = "pdf", height = 7, width = 8, units = "in")
