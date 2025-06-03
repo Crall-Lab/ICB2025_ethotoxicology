@@ -37,6 +37,7 @@ file_list <- list.files(pattern = "*interpolated.csv")
 # Process each file and combine the results
 combined_data <- do.call(rbind, lapply(file_list, process_buzz_csv)) %>%
   mutate(datetime = floor_date(datetime, "minute"))
+combined_data$Date <- as.POSIXct(combined_data$Date, tz = "UTC")
 
 #read in tag data
 tag_data <- read.csv('/Users/anupreksha/Desktop/anupreksha/hoophouse2023/data/tag_metadata.csv')
@@ -77,7 +78,10 @@ table(combined_data$microcolony, combined_data$deployed_at)
 combined_data <- subset(combined_data, 
                         !(deployed_at == '2023-08-01 17:45:01' & microcolony == '1_control') &
                           !(deployed_at == '2023-07-31 17:05:19' & microcolony == '1_imidacloprid') &
+                          !(deployed_at == '2023-09-01 17:15:01' & microcolony == '5_control') &
                           !(deployed_at == '2023-09-02 17:10:48' & microcolony == '5_imidacloprid') &
+                          !(deployed_at == '2023-09-07 18:40:02' & microcolony == '6_flupyradifurone') &
+                          !(deployed_at == '2023-09-07 18:40:02' & microcolony == '6_imidacloprid') &
                           !(deployed_at == '2023-09-16 17:10:01' & microcolony == '8_flupyradifurone') &
                           !(deployed_at == '2023-08-17 16:25:01' & microcolony == '3_imidacloprid'))
 
@@ -88,7 +92,7 @@ missing_cols <- setdiff(names(combined_data), names(nb_data))
 nb_data[missing_cols] <- NA
 nb_data$microcolony <- "9_control"
 
-missing_microcol <- data.frame(microcolony = "4_imidacloprid", deployed_at = as.POSIXct("2023-08-26 18:49:28", total_deployment_time = as.numeric("19.6")))
+missing_microcol <- data.frame(microcolony = "4_imidacloprid", deployed_at = as.POSIXct("2023-08-26 18:49:28"), total_deployment_time = as.numeric("19.6"))
 missing_cols <- setdiff(names(combined_data), names(missing_microcol))
 missing_microcol[missing_cols] <- NA
 
@@ -132,7 +136,7 @@ ft_data <- read.csv('forage_tunnel_detections.csv')
 #Set a common reference time
 start.date <- parse_date_time('2023-07-31 00:00:00', "%Y-%m-%d %H:%M:%S", tz = "America/Chicago")
 ft_data$timestamp <- as.POSIXct(ft_data$timestamp)
-ft_data$date <- as.Date(ft_data$timestamp)
+ft_data$date <- as.POSIXct(as.Date(ft_data$timestamp, tz = "America/Chicago"))
 ft_data$time.num <- as.numeric(difftime(ft_data$timestamp, start.date, units = 'days'))
 
 #add trt and round
@@ -282,7 +286,7 @@ for(i in 1:length(flower_data[,1])){
 }
 
 #Add treatment and round in to data frame
-out_data$date <- as.Date(out_data$datetime)
+out_data$date <- as.POSIXct(as.Date(out_data$datetime))
 for(zz in 1:nrow(tag_data)){
   taglist <- seq(tag_data$tag_start[zz], tag_data$tag_end[zz])
   condition <- out_data$ID %in% taglist & out_data$date %in% c(tag_data$start_date[zz], tag_data$end_date[zz])
@@ -307,7 +311,7 @@ for(i in 1:nrow(cam_metadata)){
 c1 <- out_data[out_data$count == 1, ]
 c1_sample <- c1[sample(nrow(c1), size = 5), ]
 #manually viewed videos, 4/5 were false positives
-out_data <- subset(out_data, count >1)
+#out_data <- subset(out_data, count >1)
 
 out_data$microcolony <- paste(out_data$round, out_data$treatment, sep = "_")
 

@@ -1,0 +1,312 @@
+#Load packages
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(DHARMa)
+library(lme4)
+library(lmerTest)
+library(rstudioapi)
+library(glmmTMB)
+library(tidyr)
+library(ggbeeswarm)
+library(ggsignif)
+library(emmeans)
+library(cowplot)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+setwd('..')
+rm(list = ls())
+icb_cols <- c("#009E73","#0072B2", "#E69F00")
+icb_plot <- function(data, x, y) {
+  ggplot(data, aes({{x}}, {{y}}, colour = treatment)) +
+    geom_quasirandom(alpha = 0.5) + 
+    scale_color_manual(values = icb_cols) + 
+    geom_signif(comparisons = list(c("control", "flupyradifurone"), c("control", "imidacloprid"), c("flupyradifurone", "imidacloprid")),
+                step_increase = 0.1, 
+                color = "black", map_signif_level = TRUE)+ ## easy way to draw pairwise lines. real modeled significance edited manually in Adobe Illustrator
+    scale_x_discrete(label = c("control", "FPF", "IMD"))+
+    theme_classic(base_size = 14) + 
+    labs( x = "Treatment") +
+    theme(legend.position = "none", 
+          axis.text.x = element_text(colour = icb_cols)  )
+}
+
+#### mortality
+d <- read.csv('data/tag_metadata.csv')
+d <- subset(d, !is.na(num_dead))
+d <- d %>% mutate(across(all_of(c( "round", "treatment")), as.factor))
+
+figS5 <- icb_plot(d, treatment, num_dead) + labs (y = "Number of bees dead")
+figS5
+#ggsave(figS5, filename = "results/figS5_mortality.pdf", device = "pdf", height = 3.5, width = 4, units = "in")
+
+mort.zinb <- glmmTMB(num_dead~treatment + (1|round), data = d, ziformula = ~1, family = nbinom2)
+plot(simulateResiduals(mort.zinb))
+testZeroInflation(simulateResiduals(mort.zinb))
+summary(mort.zinb)
+#write.csv(as.data.frame(summary(mort.zinb)$coefficients), "results/S2_mortality.csv", row.names = T)
+
+####### nest tracking
+nest_tracking_data <- read.csv('data/BuzzAnalyses/combinedIntBuzzAnalysis.csv')
+nest_tracking_data <- nest_tracking_data %>%
+  mutate(across(all_of(c("bee_ID", "round", "treatment", "microcolony", "day_or_night")), as.factor)) %>%
+  mutate(across(all_of(c("datetime", "deployed_at", "sunrise", "sunset")), ~ as.POSIXct(.x, format = "%Y-%m-%d %H:%M:%S")))
+
+#remove dead bees
+dead_bees <- c(10,9,20,26,24,21,28,23,303,318,109,115,110,101,112,100,159,157,153,141,147,198,457,492,633,632,635, 636, 260)
+nest_tracking_data <- subset(nest_tracking_data, !(bee_ID %in% dead_bees))
+
+live_bees <- nest_tracking_data %>% group_by(bee_ID, round, treatment, microcolony, deployed_at, total_deployment_time, sunrise, sunset) %>% summarize(
+  nest_vids = n(), 
+  last_datetime = max(datetime),
+  avg_TF = mean(trackedFrames)
+)
+
+#filter out trials with faulty data collection (blurry, lights out, didn't record the whole time)
+nest_data <- subset(nest_tracking_data, !(microcolony %in% c("6_flupyradifurone", "5_control", "9_control", "6_imidacloprid", "2_control", "5_imidacloprid", "8_control", "4_imidacloprid")))
+
+#Filter out low tracking data more aggressively?
+nest_data <- subset(nest_data, trackedFrames > 20)
+
+# remove first hour per microcolony
+nest_data <- nest_data %>% group_by(microcolony) %>% filter(time_since_deployment >= 1) 
+
+pc.vars <- c("distSC","meanIBD" ,"medianMinDistToOthers","meanBroodDistM", "medianClosestBroodDistM")
+pc.data <- log10(.001+nest_data[,pc.vars])
+
+md.ind <- complete.cases(pc.data)
+pc.data.tmp <- pc.data[md.ind,]
+
+#Run PCA
+pca <- prcomp(pc.data.tmp, scale = TRUE, center = TRUE)
+summary(pca)
+pca$rotation
+
+nest_data$pc1 <- NA
+nest_data$pc1[md.ind] <- pca$x[,1] 
+
+## Aggregate to individual data
+ind_nest_data <- nest_data %>% group_by(bee_ID, microcolony, round, treatment, total_deployment_time, day_or_night) %>% summarise(
+  mean_meanAct = mean(meanAct, na.rm = TRUE),
+  act_IQR = IQR(meanAct, na.rm = TRUE),
+  mean_meanSpeed = mean(meanSpeed, na.rm = TRUE),
+  pc1_mean = mean(pc1, na.rm = TRUE),
+  total_trackedFrames = sum(trackedFrames, na.rm = TRUE),
+  n_obs = n()
+) %>% ungroup()
+
+#Replace zeros and ones for activity data
+ind_nest_data$act_IQR[ind_nest_data$act_IQR <= 0.001] <- 0.001
+ind_nest_data$act_IQR[ind_nest_data$act_IQR >= 0.999] <- 0.999
+ind_nest_data$mean_meanAct[ind_nest_data$mean_meanAct <= 0.01] <- 0.01
+ind_nest_data$mean_meanAct[ind_nest_data$mean_meanAct >= 0.99] <- 0.99
+
+# plots
+p1 <- icb_plot(ind_nest_data, treatment, pc1_mean) + 
+  facet_wrap(~day_or_night) + 
+  labs(y = "Mean Spatial Centrality \n (PC1)", x = "") + 
+  stat_summary(fun = "median", geom = "crossbar", fatten = 3) 
+p1
+
+p2 <- icb_plot(ind_nest_data, treatment, mean_meanAct) + 
+  labs (y = "Mean Activity \n (proportion of time moving)", x = "")+ 
+  facet_wrap(~day_or_night)+ 
+  stat_summary(fun = "median", geom = "crossbar", fatten = 3) + 
+  theme(strip.text.x = element_blank())
+p2
+
+p3 <- icb_plot(ind_nest_data, treatment, act_IQR)+ 
+  labs (y = "Activity IQR \n (interquartile range)", x = "")+ 
+  facet_wrap(~day_or_night)+ 
+  stat_summary(fun = "median", geom = "crossbar", fatten = 3) + 
+  theme(strip.text.x = element_blank())
+p3
+
+p4 <- icb_plot(ind_nest_data, treatment, log10(mean_meanSpeed)) + 
+  labs (y = expression(atop("log"[10]*"(Mean Speed)", "(when active)")), x = "Treatment")+ 
+  facet_wrap(~day_or_night)+ 
+  stat_summary(fun = "median", geom = "crossbar", fatten = 3) + 
+  theme(strip.text.x = element_blank())
+p4
+
+fig2 <- plot_grid(p1, p2, p3, p4, labels = c('A', 'B', 'C', 'D'), ncol = 1, align = 'v')
+fig2
+#ggsave(fig2, filename = "results/fig2_nestbehavior.pdf", device = "pdf", height = 13, width = 6, units = "in")
+
+#####models
+
+#### pc1- spatial centrality
+pc1.mod <- lmer(pc1_mean~treatment*day_or_night+(1|round/microcolony/bee_ID), data = ind_nest_data)
+#Check fit plot
+plot(simulateResiduals(pc1.mod))
+summary(pc1.mod)
+#write.csv(as.data.frame(summary(pc1.mod)$coefficients), "results/S3_spatial_centrality.csv", row.names = T)
+#Assess effects
+emm_treatment.pc1 <- emmeans(pc1.mod, ~ treatment|day_or_night, type = "response")
+pairs(emm_treatment.pc1, adjust = "tukey")
+#write.csv(pairs(emm_treatment.pc1, adjust = "tukey"), "results/S4_sp_centr_comparisons.csv", row.names = F)
+
+##### Activity by treatment
+act.mod <- glmmTMB(mean_meanAct~treatment*day_or_night+(1|round/microcolony/bee_ID), data = ind_nest_data, family = beta_family())
+plot(simulateResiduals(act.mod))
+summary(act.mod)
+#write.csv(as.data.frame(summary(act.mod)$coefficients$cond), "results/S5_mean_activity.csv", row.names = T)
+
+emm_treatment_by_time.act <- emmeans(act.mod, ~ treatment | day_or_night, type = "response")
+pairs(emm_treatment_by_time.act, adjust = "tukey")
+#write.csv(pairs(emm_treatment_by_time.act, adjust = "tukey"), "results/S6_mean_act_comparisons.csv", row.names = F)
+
+##### Explore variability in activity
+tmp <- subset(ind_nest_data,n_obs > 25 & total_trackedFrames > 2000)
+act.iqr.t <- glmmTMB(act_IQR ~ treatment*day_or_night+(1|round/microcolony/bee_ID), data = tmp, family = beta_family())
+plot(simulateResiduals(act.iqr.t))
+summary(act.iqr.t)
+#write.csv(as.data.frame(summary(act.iqr.t)$coefficients$cond), "results/S7_activity_iqr.csv", row.names = T)
+
+# Use emmeans to assess effects and pairwise differences
+emm_treatment_by_time.act.var <- emmeans(act.iqr.t, ~ treatment | day_or_night, type = "response")
+pairs(emm_treatment_by_time.act.var, adjust = "tukey")
+#write.csv(pairs(emm_treatment_by_time.act.var, adjust = "tukey"), "results/S8_act_iqr_comparisons.csv", row.names = F)
+
+##### speed
+speed.mod <- lmer(log10(mean_meanSpeed) ~ treatment*day_or_night+(1|round/microcolony/bee_ID), data = ind_nest_data)
+plot(simulateResiduals(speed.mod))
+summary(speed.mod)
+#write.csv(as.data.frame(summary(speed.mod)$coefficients), "results/S9_mean_speed.csv", row.names = T)
+
+emm_treatment_by_time.speed <- emmeans(speed.mod, ~ treatment | day_or_night, type = "response")
+pairs(emm_treatment_by_time.speed, adjust = "tukey")
+#write.csv(pairs(emm_treatment_by_time.speed, adjust = "tukey"), "results/S10_speed_comparisons.csv", row.names = F)
+
+###########forage tunnel
+ft_data <- read.csv('data/forage_tunnel_bouts.csv')
+
+# filter lighting and tag tracking issues etc
+ft_data <- subset(ft_data, !(microcolony %in% c("6_flupyradifurone", "5_control", "6_imidacloprid", "1_control", "1_imidacloprid", "2_imidacloprid", "4_imidacloprid", "4_flupyradifurone", "6_control", "7_flupyradifurone", "10_imidacloprid", "10_flupyradifurone") ))
+
+ft_data <- ft_data %>% mutate(time_since_deployment = as.numeric(difftime(datetime, deployed_at, units = "hours")))
+ft_data <- ft_data %>% filter(time_since_deployment >= 1) 
+
+ft_data <- subset(ft_data, ft_data$day_or_night == "day")
+
+ind_ft_data <- ft_data %>% group_by(bee_ID) %>%
+  summarize(
+    round = first(round),
+    treatment = first(treatment),
+    microcolony = first(microcolony),
+    number_of_bouts = n(),
+    total_deployment_time = first(total_deployment_time),
+    foraged_y_n = ifelse(n() > 0, 1, 0)
+  )
+ind_ft_data <- ind_ft_data %>%
+  mutate(across(all_of(c("round", "treatment", "microcolony", "bee_ID")), as.factor))
+
+#standardize for 24 h by total deployment time
+ind_ft_data$st_bouts <- ind_ft_data$number_of_bouts/ind_ft_data$total_deployment_time
+ind_ft_data$bouts_per_24h <- round(ind_ft_data$st_bouts*24)
+
+#Subset to live bees
+live_bee <- subset(live_bees, nest_vids >3)
+
+#Combine nest tracking and foraging tunnel data
+nest_and_ft <- full_join(live_bee, ind_ft_data, by = c("bee_ID", "treatment", "round", "microcolony", "total_deployment_time"))
+nest_and_ft <- subset(nest_and_ft, !(microcolony %in% c("6_flupyradifurone", "5_control", "6_imidacloprid", "1_control", "1_imidacloprid", "2_imidacloprid", "4_imidacloprid", "4_flupyradifurone", "6_control", "7_flupyradifurone", "10_imidacloprid", "10_flupyradifurone", "9_control") ))
+
+nest_and_ft[is.na(nest_and_ft$number_of_bouts), "number_of_bouts"] <- 0
+nest_and_ft[is.na(nest_and_ft$bouts_per_24h), "bouts_per_24h"] <- 0
+nest_and_ft[is.na(nest_and_ft$st_bouts), "st_bouts"] <- 0
+nest_and_ft[is.na(nest_and_ft$foraged_y_n), "foraged_y_n"] <- 0
+
+#bee-level foraging activity (with true zeroes)
+p5 <- icb_plot(nest_and_ft, treatment, bouts_per_24h) + 
+  labs (y = "Number of foraging transits", x = "Treatment")+
+  stat_summary(shape =15, color = "black")
+p5
+
+ft.mod <- glmmTMB(bouts_per_24h~treatment + (1|round/microcolony), data = nest_and_ft, ziformula = ~1, family = nbinom2)
+res.ft <- simulateResiduals(ft.mod)
+plot(res.ft)
+testZeroInflation(res.ft)
+summary(ft.mod)
+#write.csv(as.data.frame(summary(ft.mod)$coefficients), "results/S11_foraging_act.csv", row.names = T)
+
+#######flower visitation
+out_data <- read.csv("data/flower_visits.csv")
+
+#count here is number of frames in the video that the bee was detected - restricted to two or more frames for quality control
+out_data<- subset(out_data, count >2)
+
+#Aggregate data to microcolony scale
+microcols <- live_bees %>% group_by(round,treatment,microcolony,total_deployment_time) %>% summarize(
+  col_size = n(),
+  total_deployment_time = unique(total_deployment_time)
+) 
+
+missing_row <- microcols[1, ]
+missing_row[] <- NA
+missing_row$microcolony <- "6_flupyradifurone"
+microcols <- rbind(microcols, missing_row)
+
+mean_val <- mean(microcols$total_deployment_time[microcols$total_deployment_time >= 19], na.rm = TRUE)
+microcols$total_deployment_time <- ifelse(is.na(microcols$total_deployment_time) | microcols$total_deployment_time < 19 , mean_val, microcols$total_deployment_time)
+
+out_data$total_deployment_time <- setNames(microcols$total_deployment_time, microcols$microcolony)[out_data$microcolony]
+
+bee_flower_visits <- out_data %>%
+  arrange(ID, camera, datetime) %>%
+  group_by(ID, camera) %>%
+  mutate(bout = cumsum(difftime(datetime, lag(datetime, default = first(datetime)), units = "mins") > 3)) %>%
+  group_by(camera, round, treatment, species, ID, microcolony) %>%
+  summarize(visits = n_distinct(bout), total_deployment_time = unique(total_deployment_time)) %>% ungroup()
+bee_flower_visits <- bee_flower_visits %>%  mutate(across(all_of(c("ID", "round", "treatment", "camera", "species", "microcolony")), as.factor))
+bee_flower_visits$visits <- round((bee_flower_visits$visits/bee_flower_visits$total_deployment_time)*24)
+
+bee_species_visits <- bee_flower_visits %>%
+  group_by(species, ID, round, treatment, microcolony) %>%
+  summarize(
+    visits = sum(visits),
+    unique_flowers = n_distinct(camera)
+  )
+
+bee_species_wide <- bee_species_visits %>%
+  pivot_wider(names_from = species, values_from = c(visits, unique_flowers)) %>%
+  mutate(across(starts_with("visits_"), ~ replace_na(.x, 0))) %>%
+  mutate(total_visits = rowSums(across(starts_with("visits_")))) %>%
+  mutate(across(starts_with("unique_flowers_"), ~ replace_na(.x, 0))) %>%
+  mutate(total_unique_flowers = rowSums(across(starts_with("unique_flowers_"))))
+
+#bee-level foraging by treatment
+p6 <- icb_plot(bee_species_wide, treatment, total_visits) + 
+  labs( y = "Total flowers visited") + 
+  stat_summary(shape =15, color = "black")+
+  coord_cartesian(ylim = c(0, 30))
+p6
+
+p7 <- icb_plot(bee_species_visits, treatment, visits) + 
+  labs( y = "Number of flowers visited") + 
+  facet_wrap(~species) + 
+  stat_summary(shape =15, color = "black")+
+  coord_cartesian(ylim = c(0, 20))
+p7
+
+fl.mod1 <- glmmTMB(log1p(total_visits) ~ treatment + (1|round/microcolony), data = bee_species_wide)
+res.fl1 <- simulateResiduals(fl.mod1)
+plot(res.fl1)
+summary(fl.mod1)
+#write.csv(as.data.frame(summary(fl.mod1)$coefficients$cond), "results/S12_total_visitation.csv", row.names = T)
+
+fl.mod2 <- glmmTMB(log1p(visits) ~ treatment*species + (1|round/microcolony), data = bee_species_visits)
+res.fl2 <- simulateResiduals(fl.mod2)
+plot(res.fl2)
+summary(fl.mod2)
+#write.csv(as.data.frame(summary(fl.mod2)$coefficients$cond), "results/S13_visitation_by_sp.csv", row.names = T)
+
+emm.mod.fl2 <- emmeans(fl.mod2,  ~ treatment|species)
+pairs(emm.mod.fl2, adjust = "tukey")
+#write.csv(pairs(emm.mod.fl2, adjust = "tukey"), "results/S14_sp_visits_comparisons.csv", row.names = F)
+
+top_row <- plot_grid(p5, p6, labels = c("A", "B"), ncol = 2)
+bottom_row <- plot_grid(p7, labels = "C")
+fig3 <- plot_grid(top_row, bottom_row, ncol = 1, rel_heights = c(1, 1))
+fig3
+#ggsave(fig3, filename = "results/fig3_foraging.pdf", device = "pdf", height = 7, width = 8, units = "in")
